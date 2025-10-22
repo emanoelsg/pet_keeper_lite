@@ -1,406 +1,405 @@
+// functions/index.js
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 
 admin.initializeApp();
 
-// Função para notificar família sobre uma tarefa
+// Função auxiliar para obter o familyCode e displayName do usuário que fez a chamada
+async function getUserFamilyAndDisplayName(contextAuthUid) {
+  const userDoc = await admin.firestore().collection('users').doc(contextAuthUid).get();
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Usuário que fez a chamada não encontrado.');
+  }
+  const userData = userDoc.data();
+  if (!userData.familyCode) {
+    throw new functions.https.HttpsError('failed-precondition', 'Usuário não tem um código de família.');
+  }
+  return { familyCode: userData.familyCode, displayName: userData.displayName || 'Alguém da família' };
+}
+
+// Função auxiliar para obter o nome do pet
+async function getPetName(petId) {
+  const petDoc = await admin.firestore().collection('pets').doc(petId).get();
+  if (!petDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Pet não encontrado.');
+  }
+  return petDoc.data().name || 'Um pet';
+}
+
+
+// Função para notificar família sobre uma tarefa (ou evento genérico)
 exports.notifyFamily = functions.https.onCall(async (data, context) => {
+  // 1. Verificar autenticação
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  }
+  const callerUid = context.auth.uid;
+
+  const { petId, taskTitle, message } = data; // createdBy não é mais necessário aqui, usamos o displayName do caller
+
+  // Validação de entrada
+  if (!petId || !taskTitle) { // message pode ser opcional
+    throw new functions.https.HttpsError('invalid-argument', 'Dados obrigatórios (petId, taskTitle) não fornecidos.');
+  }
+
+  functions.logger.log("notifyFamily chamada por:", callerUid, "com dados:", data);
+
   try {
-    // Verificar autenticação
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
+    const { familyCode, displayName } = await getUserFamilyAndDisplayName(callerUid);
+    const petName = await getPetName(petId);
 
-    const { petId, taskTitle, message, createdBy } = data;
-
-    if (!petId || !taskTitle) {
-      throw new functions.https.HttpsError('invalid-argument', 'Dados obrigatórios não fornecidos');
-    }
-
-    // Obter dados do usuário
-    const userDoc = await admin.firestore().collection('users').doc(createdBy).get();
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
-    }
-
-    const userData = userDoc.data();
-    const familyCode = userData.familyCode;
-
-    // Obter todos os membros da família
+    // Obter todos os membros da família (exceto o próprio remetente)
     const familyMembersSnapshot = await admin.firestore()
       .collection('users')
       .where('familyCode', '==', familyCode)
       .get();
 
-    const notifications = [];
-
-    for (const memberDoc of familyMembersSnapshot.docs) {
-      const memberData = memberDoc.data();
-      const fcmTokens = memberData.fcmTokens || [];
-
-      for (const token of fcmTokens) {
-        const notification = {
-          token: token,
-          notification: {
-            title: 'Nova tarefa para o pet',
-            body: `${taskTitle} - ${message || 'Nova tarefa adicionada'}`,
-          },
-          data: {
-            type: 'new_task',
-            petId: petId,
-            taskTitle: taskTitle,
-            createdBy: createdBy,
-          },
-        };
-
-        notifications.push(notification);
+    const registrationTokens = [];
+    familyMembersSnapshot.forEach(doc => {
+      // Não enviar notificação para o próprio usuário que acionou a função
+      if (doc.id !== callerUid) {
+        const memberData = doc.data();
+        if (memberData.fcmTokens && Array.isArray(memberData.fcmTokens)) {
+          registrationTokens.push(...memberData.fcmTokens);
+        }
       }
+    });
+
+    if (registrationTokens.length === 0) {
+      functions.logger.log("Nenhum token de registro encontrado na família (excluindo o remetente).");
+      return { success: true, message: "Nenhum token para notificar." };
     }
 
-    // Enviar notificações
-    if (notifications.length > 0) {
-      const response = await admin.messaging().sendAll(notifications);
-      console.log(`Notificações enviadas: ${response.successCount}/${notifications.length}`);
-    }
+    // Remover tokens duplicados
+    const uniqueTokens = [...new Set(registrationTokens)];
 
-    return { success: true, notificationsSent: notifications.length };
+    // Montar a mensagem de notificação
+    const payload = {
+      notification: {
+        title: `PetKeeper Lite: ${petName}`,
+        body: `${taskTitle} - ${displayName}`, // Usando o displayName do remetente
+      },
+      data: {
+        type: 'new_task',
+        petId: petId,
+        taskTitle: taskTitle,
+        // createdBy aqui pode ser o displayName, se você quiser exibi-lo no app
+        createdByDisplayName: displayName,
+        // message, se você quiser que o app exiba algo diferente do taskTitle
+        message: message || `Uma nova tarefa foi adicionada para ${petName}.`,
+      },
+    };
+
+    // Enviar notificações usando sendEachForMulticast para melhor performance e feedback
+    const response = await admin.messaging().sendEachForMulticast({
+      tokens: uniqueTokens,
+      ...payload
+    });
+
+    // Opcional: Log de resultados e limpeza de tokens inválidos (melhoria futura)
+    functions.logger.log(`Notificações enviadas para ${response.successCount} de ${uniqueTokens.length} tokens.`);
+    response.responses.forEach((res, idx) => {
+      if (!res.success) {
+        functions.logger.error(`Falha ao enviar para token ${uniqueTokens[idx]}:`, res.error);
+        // Aqui você pode adicionar lógica para remover tokens inválidos do Firestore.
+        // O desafio não exige, mas é uma boa prática.
+      }
+    });
+
+
+    return { success: true, notificationsSent: response.successCount };
   } catch (error) {
-    console.error('Erro ao notificar família:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao notificar família:', error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
 
+
+// FUNÇÕES SIMPLIFICADAS PARA OUTROS TIPOS DE NOTIFICAÇÃO (usando a mesma estrutura)
+// Você pode consolidar algumas delas se a lógica for muito similar.
+
 // Função para notificar sobre tarefa vencida
 exports.notifyOverdueTask = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  const callerUid = context.auth.uid;
+  const { petId, taskTitle, dueDate } = data; // createdBy não é mais necessário
+
+  if (!petId || !taskTitle || !dueDate) {
+    throw new functions.https.HttpsError('invalid-argument', 'Dados obrigatórios não fornecidos');
+  }
+
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
+    const { familyCode, displayName } = await getUserFamilyAndDisplayName(callerUid);
+    const petName = await getPetName(petId);
 
-    const { petId, taskTitle, dueDate, createdBy } = data;
-
-    // Obter dados do usuário e família
-    const userDoc = await admin.firestore().collection('users').doc(createdBy).get();
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
-    }
-
-    const userData = userDoc.data();
-    const familyCode = userData.familyCode;
-
-    // Obter membros da família
     const familyMembersSnapshot = await admin.firestore()
       .collection('users')
       .where('familyCode', '==', familyCode)
       .get();
 
-    const notifications = [];
-
-    for (const memberDoc of familyMembersSnapshot.docs) {
-      const memberData = memberDoc.data();
-      const fcmTokens = memberData.fcmTokens || [];
-
-      for (const token of fcmTokens) {
-        const notification = {
-          token: token,
-          notification: {
-            title: 'Tarefa vencida!',
-            body: `${taskTitle} estava prevista para ${new Date(dueDate).toLocaleDateString('pt-BR')}`,
-          },
-          data: {
-            type: 'overdue_task',
-            petId: petId,
-            taskTitle: taskTitle,
-            dueDate: dueDate,
-          },
-        };
-
-        notifications.push(notification);
+    const registrationTokens = [];
+    familyMembersSnapshot.forEach(doc => {
+      if (doc.id !== callerUid && doc.data().fcmTokens && Array.isArray(doc.data().fcmTokens)) {
+        registrationTokens.push(...doc.data().fcmTokens);
       }
-    }
+    });
 
-    if (notifications.length > 0) {
-      await admin.messaging().sendAll(notifications);
-    }
+    if (registrationTokens.length === 0) return { success: true, message: "Nenhum token para notificar." };
+    const uniqueTokens = [...new Set(registrationTokens)];
 
-    return { success: true };
+    const payload = {
+      notification: {
+        title: `PetKeeper Lite: ${petName}`,
+        body: `Tarefa vencida: ${taskTitle} estava prevista para ${new Date(dueDate).toLocaleDateString('pt-BR')}`,
+      },
+      data: {
+        type: 'overdue_task',
+        petId: petId,
+        taskTitle: taskTitle,
+        dueDate: new Date(dueDate).toISOString(), // Mantenha o formato ISO para fácil parse no app
+        createdByDisplayName: displayName,
+      },
+    };
+
+    const response = await admin.messaging().sendEachForMulticast({ tokens: uniqueTokens, ...payload });
+    return { success: true, notificationsSent: response.successCount };
   } catch (error) {
-    console.error('Erro ao notificar tarefa vencida:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao notificar tarefa vencida:', error);
+    if (error instanceof functions.https.HttpsError) throw error;
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
 
 // Função para notificar sobre nova vacina
 exports.notifyNewVaccine = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  const callerUid = context.auth.uid;
+  const { petId, vaccineName, dueDate } = data; // createdBy não é mais necessário
+
+  if (!petId || !vaccineName || !dueDate) {
+    throw new functions.https.HttpsError('invalid-argument', 'Dados obrigatórios não fornecidos');
+  }
+
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
+    const { familyCode, displayName } = await getUserFamilyAndDisplayName(callerUid);
+    const petName = await getPetName(petId);
 
-    const { petId, vaccineName, dueDate, createdBy } = data;
-
-    // Obter dados do usuário e família
-    const userDoc = await admin.firestore().collection('users').doc(createdBy).get();
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
-    }
-
-    const userData = userDoc.data();
-    const familyCode = userData.familyCode;
-
-    // Obter membros da família
     const familyMembersSnapshot = await admin.firestore()
       .collection('users')
       .where('familyCode', '==', familyCode)
       .get();
 
-    const notifications = [];
-
-    for (const memberDoc of familyMembersSnapshot.docs) {
-      const memberData = memberDoc.data();
-      const fcmTokens = memberData.fcmTokens || [];
-
-      for (const token of fcmTokens) {
-        const notification = {
-          token: token,
-          notification: {
-            title: 'Nova vacina agendada',
-            body: `${vaccineName} - ${new Date(dueDate).toLocaleDateString('pt-BR')}`,
-          },
-          data: {
-            type: 'new_vaccine',
-            petId: petId,
-            vaccineName: vaccineName,
-            dueDate: dueDate,
-          },
-        };
-
-        notifications.push(notification);
+    const registrationTokens = [];
+    familyMembersSnapshot.forEach(doc => {
+      if (doc.id !== callerUid && doc.data().fcmTokens && Array.isArray(doc.data().fcmTokens)) {
+        registrationTokens.push(...doc.data().fcmTokens);
       }
-    }
+    });
 
-    if (notifications.length > 0) {
-      await admin.messaging().sendAll(notifications);
-    }
+    if (registrationTokens.length === 0) return { success: true, message: "Nenhum token para notificar." };
+    const uniqueTokens = [...new Set(registrationTokens)];
 
-    return { success: true };
+    const payload = {
+      notification: {
+        title: `PetKeeper Lite: ${petName}`,
+        body: `Nova vacina: ${vaccineName} agendada para ${new Date(dueDate).toLocaleDateString('pt-BR')}`,
+      },
+      data: {
+        type: 'new_vaccine',
+        petId: petId,
+        vaccineName: vaccineName,
+        dueDate: new Date(dueDate).toISOString(),
+        createdByDisplayName: displayName,
+      },
+    };
+
+    const response = await admin.messaging().sendEachForMulticast({ tokens: uniqueTokens, ...payload });
+    return { success: true, notificationsSent: response.successCount };
   } catch (error) {
-    console.error('Erro ao notificar nova vacina:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao notificar nova vacina:', error);
+    if (error instanceof functions.https.HttpsError) throw error;
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
 
 // Função para notificar sobre novo pet
 exports.notifyNewPet = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  const callerUid = context.auth.uid;
+  const { petName, petSpecies } = data; // createdBy não é mais necessário
+
+  if (!petName || !petSpecies) {
+    throw new functions.https.HttpsError('invalid-argument', 'Dados obrigatórios não fornecidos');
+  }
+
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
+    const { familyCode, displayName } = await getUserFamilyAndDisplayName(callerUid);
 
-    const { petName, petSpecies, createdBy } = data;
-
-    // Obter dados do usuário e família
-    const userDoc = await admin.firestore().collection('users').doc(createdBy).get();
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
-    }
-
-    const userData = userDoc.data();
-    const familyCode = userData.familyCode;
-
-    // Obter membros da família
     const familyMembersSnapshot = await admin.firestore()
       .collection('users')
       .where('familyCode', '==', familyCode)
       .get();
 
-    const notifications = [];
-
-    for (const memberDoc of familyMembersSnapshot.docs) {
-      const memberData = memberDoc.data();
-      const fcmTokens = memberData.fcmTokens || [];
-
-      for (const token of fcmTokens) {
-        const notification = {
-          token: token,
-          notification: {
-            title: 'Novo pet adicionado!',
-            body: `${petName} (${petSpecies}) foi adicionado à família`,
-          },
-          data: {
-            type: 'new_pet',
-            petName: petName,
-            petSpecies: petSpecies,
-          },
-        };
-
-        notifications.push(notification);
+    const registrationTokens = [];
+    familyMembersSnapshot.forEach(doc => {
+      if (doc.id !== callerUid && doc.data().fcmTokens && Array.isArray(doc.data().fcmTokens)) {
+        registrationTokens.push(...doc.data().fcmTokens);
       }
-    }
+    });
 
-    if (notifications.length > 0) {
-      await admin.messaging().sendAll(notifications);
-    }
+    if (registrationTokens.length === 0) return { success: true, message: "Nenhum token para notificar." };
+    const uniqueTokens = [...new Set(registrationTokens)];
 
-    return { success: true };
+    const payload = {
+      notification: {
+        title: `PetKeeper Lite: ${petName}`,
+        body: `${petName} (${petSpecies}) foi adicionado por ${displayName}!`,
+      },
+      data: {
+        type: 'new_pet',
+        petName: petName,
+        petSpecies: petSpecies,
+        createdByDisplayName: displayName,
+      },
+    };
+
+    const response = await admin.messaging().sendEachForMulticast({ tokens: uniqueTokens, ...payload });
+    return { success: true, notificationsSent: response.successCount };
   } catch (error) {
-    console.error('Erro ao notificar novo pet:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao notificar novo pet:', error);
+    if (error instanceof functions.https.HttpsError) throw error;
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
 
 // Função para notificar sobre tarefa concluída
 exports.notifyTaskCompleted = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  const callerUid = context.auth.uid;
+  const { petId, taskTitle } = data; // completedBy não é mais necessário
+
+  if (!petId || !taskTitle) {
+    throw new functions.https.HttpsError('invalid-argument', 'Dados obrigatórios não fornecidos');
+  }
+
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
+    const { familyCode, displayName } = await getUserFamilyAndDisplayName(callerUid);
+    const petName = await getPetName(petId);
 
-    const { petId, taskTitle, completedBy } = data;
-
-    // Obter dados do usuário e família
-    const userDoc = await admin.firestore().collection('users').doc(completedBy).get();
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
-    }
-
-    const userData = userDoc.data();
-    const familyCode = userData.familyCode;
-
-    // Obter membros da família
     const familyMembersSnapshot = await admin.firestore()
       .collection('users')
       .where('familyCode', '==', familyCode)
       .get();
 
-    const notifications = [];
-
-    for (const memberDoc of familyMembersSnapshot.docs) {
-      const memberData = memberDoc.data();
-      const fcmTokens = memberData.fcmTokens || [];
-
-      for (const token of fcmTokens) {
-        const notification = {
-          token: token,
-          notification: {
-            title: 'Tarefa concluída!',
-            body: `${taskTitle} foi marcada como concluída`,
-          },
-          data: {
-            type: 'task_completed',
-            petId: petId,
-            taskTitle: taskTitle,
-            completedBy: completedBy,
-          },
-        };
-
-        notifications.push(notification);
+    const registrationTokens = [];
+    familyMembersSnapshot.forEach(doc => {
+      if (doc.id !== callerUid && doc.data().fcmTokens && Array.isArray(doc.data().fcmTokens)) {
+        registrationTokens.push(...doc.data().fcmTokens);
       }
-    }
+    });
 
-    if (notifications.length > 0) {
-      await admin.messaging().sendAll(notifications);
-    }
+    if (registrationTokens.length === 0) return { success: true, message: "Nenhum token para notificar." };
+    const uniqueTokens = [...new Set(registrationTokens)];
 
-    return { success: true };
+    const payload = {
+      notification: {
+        title: `PetKeeper Lite: ${petName}`,
+        body: `Tarefa concluída: ${taskTitle} por ${displayName}`,
+      },
+      data: {
+        type: 'task_completed',
+        petId: petId,
+        taskTitle: taskTitle,
+        completedByDisplayName: displayName,
+      },
+    };
+
+    const response = await admin.messaging().sendEachForMulticast({ tokens: uniqueTokens, ...payload });
+    return { success: true, notificationsSent: response.successCount };
   } catch (error) {
-    console.error('Erro ao notificar tarefa concluída:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao notificar tarefa concluída:', error);
+    if (error instanceof functions.https.HttpsError) throw error;
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
 
 // Função para enviar mensagem personalizada
 exports.sendCustomMessage = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  const callerUid = context.auth.uid;
+  const { message, title } = data; // sentBy não é mais necessário
+
+  if (!message) {
+    throw new functions.https.HttpsError('invalid-argument', 'Mensagem não fornecida');
+  }
+
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
+    const { familyCode, displayName } = await getUserFamilyAndDisplayName(callerUid);
 
-    const { message, title, sentBy } = data;
-
-    // Obter dados do usuário e família
-    const userDoc = await admin.firestore().collection('users').doc(sentBy).get();
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
-    }
-
-    const userData = userDoc.data();
-    const familyCode = userData.familyCode;
-
-    // Obter membros da família
     const familyMembersSnapshot = await admin.firestore()
       .collection('users')
       .where('familyCode', '==', familyCode)
       .get();
 
-    const notifications = [];
-
-    for (const memberDoc of familyMembersSnapshot.docs) {
-      const memberData = memberDoc.data();
-      const fcmTokens = memberData.fcmTokens || [];
-
-      for (const token of fcmTokens) {
-        const notification = {
-          token: token,
-          notification: {
-            title: title || 'Mensagem da família',
-            body: message,
-          },
-          data: {
-            type: 'custom_message',
-            message: message,
-            sentBy: sentBy,
-          },
-        };
-
-        notifications.push(notification);
+    const registrationTokens = [];
+    familyMembersSnapshot.forEach(doc => {
+      if (doc.id !== callerUid && doc.data().fcmTokens && Array.isArray(doc.data().fcmTokens)) {
+        registrationTokens.push(...doc.data().fcmTokens);
       }
-    }
+    });
 
-    if (notifications.length > 0) {
-      await admin.messaging().sendAll(notifications);
-    }
+    if (registrationTokens.length === 0) return { success: true, message: "Nenhum token para notificar." };
+    const uniqueTokens = [...new Set(registrationTokens)];
 
-    return { success: true };
+    const payload = {
+      notification: {
+        title: title || `PetKeeper Lite: Mensagem de ${displayName}`,
+        body: message,
+      },
+      data: {
+        type: 'custom_message',
+        message: message,
+        sentByDisplayName: displayName,
+      },
+    };
+
+    const response = await admin.messaging().sendEachForMulticast({ tokens: uniqueTokens, ...payload });
+    return { success: true, notificationsSent: response.successCount };
   } catch (error) {
-    console.error('Erro ao enviar mensagem personalizada:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao enviar mensagem personalizada:', error);
+    if (error instanceof functions.https.HttpsError) throw error;
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
 
-// Função para obter estatísticas da família
+// Função para obter estatísticas da família (CORRIGIDA)
 exports.getFamilyStats = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  }
+  const callerUid = context.auth.uid; // Usamos context.auth.uid diretamente
+
+  functions.logger.log("getFamilyStats chamada por:", callerUid);
+
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
+    const { familyCode } = await getUserFamilyAndDisplayName(callerUid); // Obtém familyCode do caller
 
-    const { userId } = data;
-
-    // Obter dados do usuário
-    const userDoc = await admin.firestore().collection('users').doc(userId).get();
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
-    }
-
-    const userData = userDoc.data();
-    const familyCode = userData.familyCode;
-
-    // Obter estatísticas dos pets
+    // Obter estatísticas dos pets (já filtrado por familyCode)
     const petsSnapshot = await admin.firestore()
       .collection('pets')
       .where('familyCode', '==', familyCode)
       .get();
 
-    // Obter estatísticas das tarefas
+    // Obter estatísticas das tarefas (CORRIGIDO: agora filtra por familyCode no Firestore)
     const tasksSnapshot = await admin.firestore()
       .collection('pet_tasks')
+      .where('familyCode', '==', familyCode) // FILTRA DIRETAMENTE AQUI
       .get();
 
-    const familyPetIds = petsSnapshot.docs.map(doc => doc.id);
-    const familyTasks = tasksSnapshot.docs
-      .map(doc => doc.data())
-      .filter(task => familyPetIds.includes(task.petId));
+    const familyTasks = tasksSnapshot.docs.map(doc => doc.data());
 
     const stats = {
       totalPets: petsSnapshot.size,
@@ -408,29 +407,35 @@ exports.getFamilyStats = functions.https.onCall(async (data, context) => {
       completedTasks: familyTasks.filter(task => task.done).length,
       pendingTasks: familyTasks.filter(task => !task.done).length,
       overdueTasks: familyTasks.filter(task => {
+        // Assume que dueDate é um Timestamp do Firestore, ou Date object se convertido
         if (!task.dueDate) return false;
-        return new Date(task.dueDate.toDate()) < new Date() && !task.done;
+        const taskDueDate = task.dueDate.toDate ? task.dueDate.toDate() : new Date(task.dueDate);
+        return taskDueDate < new Date() && !task.done;
       }).length,
     };
 
     return { success: true, stats };
   } catch (error) {
-    console.error('Erro ao obter estatísticas:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao obter estatísticas:', error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
 
-// Função para limpar tokens FCM antigos
+// Função para limpar tokens FCM antigos (CORRIGIDA)
 exports.cleanupOldFcmTokens = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
+  }
+  const callerUid = context.auth.uid; // Usamos context.auth.uid diretamente
+
+  functions.logger.log("cleanupOldFcmTokens chamada por:", callerUid);
+
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Usuário não autenticado');
-    }
-
-    const { userId } = data;
-
-    // Obter dados do usuário
-    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    const userDocRef = admin.firestore().collection('users').doc(callerUid);
+    const userDoc = await userDocRef.get();
     if (!userDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Usuário não encontrado');
     }
@@ -438,33 +443,56 @@ exports.cleanupOldFcmTokens = functions.https.onCall(async (data, context) => {
     const userData = userDoc.data();
     const fcmTokens = userData.fcmTokens || [];
 
-    // Verificar quais tokens ainda são válidos
+    const messaging = admin.messaging();
     const validTokens = [];
-    for (const token of fcmTokens) {
-      try {
-        await admin.messaging().send({
-          token: token,
-          data: { test: 'true' },
-        }, true);
-        validTokens.push(token);
-      } catch (error) {
-        console.log(`Token inválido removido: ${token}`);
-      }
+    const tokensToRemove = [];
+
+    // Verificamos a validade de cada token
+    // Nota: sendAll para dryRun é mais eficiente que send em loop para muitos tokens
+    const dryRunMessages = fcmTokens.map(token => ({ token: token, data: { test: 'true' } }));
+    if (dryRunMessages.length > 0) {
+      const response = await messaging.sendEachForMulticast({tokens: fcmTokens, data: { test: 'true' }}, true); // Dry run
+      
+      response.responses.forEach((res, index) => {
+        const token = fcmTokens[index];
+        if (res.success) {
+          validTokens.push(token);
+        } else {
+          // Se o erro indica que o token não é registrado ou é inválido, marcamos para remoção
+          if (res.error && (res.error.code === 'messaging/invalid-argument' || res.error.code === 'messaging/registration-token-not-registered' || res.error.code === 'messaging/unregistered')) {
+            functions.logger.log(`Token FCM inválido/não registrado para ${callerUid}: ${token}`);
+            tokensToRemove.push(token);
+          } else {
+            // Outros erros, talvez seja temporário, mantém o token por enquanto
+            validTokens.push(token);
+            functions.logger.warn(`Erro ao verificar token ${token} para ${callerUid}:`, res.error);
+          }
+        }
+      });
     }
 
-    // Atualizar tokens válidos
-    await admin.firestore().collection('users').doc(userId).update({
-      fcmTokens: validTokens,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    // Atualizar apenas se houver mudança nos tokens (para economizar escrita)
+    if (fcmTokens.length !== validTokens.length) {
+      await userDocRef.update({
+        fcmTokens: validTokens,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      functions.logger.log(`Tokens FCM limpos para ${callerUid}. Removidos: ${tokensToRemove.length}, Válidos: ${validTokens.length}`);
+    } else {
+      functions.logger.log(`Nenhum token FCM inválido encontrado para ${callerUid}.`);
+    }
 
-    return { 
-      success: true, 
-      removedTokens: fcmTokens.length - validTokens.length,
+    return {
+      success: true,
+      removedTokens: tokensToRemove.length,
       validTokens: validTokens.length,
     };
   } catch (error) {
-    console.error('Erro ao limpar tokens:', error);
-    throw new functions.https.HttpsError('internal', 'Erro interno do servidor');
+    functions.logger.error('Erro ao limpar tokens:', error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError('internal', 'Erro interno do servidor', error.message);
   }
 });
+
