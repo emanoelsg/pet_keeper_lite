@@ -6,6 +6,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/utils/validators.dart';
 import '../providers/auth_provider.dart';
+import '../models/user.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -28,122 +29,83 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  Future<void> _signInWithEmailAndPassword() async {
+  Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
-
     try {
       await ref.read(authNotifierProvider.notifier).signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-      );
-      
-      if (mounted) {
-        context.go('/home');
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+      final user = ref.read(authNotifierProvider).value;
+      if (user != null) {
+        // navegação
+        context.go('/home'); // ajuste para sua rota de HomePage
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString()),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
+    } catch (_) {
+      // Erro será tratado pelo ref.listen abaixo
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-  }
-
-  Future<void> _signInWithGoogle() async {
-    setState(() => _isLoading = true);
-
-    try {
-      await ref.read(authNotifierProvider.notifier).signInWithGoogle();
-      
-      if (mounted) {
-        context.go('/home');
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString()),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+
+    ref.listen<AsyncValue<User?>>(
+      authNotifierProvider,
+      (previous, next) {
+        next.whenOrNull(
+          error: (err, _) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(err.toString())),
+            );
+          },
+        );
+      },
+    );
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 60),
-              
-              // Logo e título
-              Icon(
-                Icons.pets,
-                size: 80,
-                color: AppColors.primary,
-              ),
+              Icon(Icons.pets, size: 80, color: AppColors.primary),
               const SizedBox(height: 24),
-              
               Text(
                 'PetKeeper Lite',
-                style: AppTextStyles.h1.copyWith(
-                  color: AppColors.primary,
-                ),
+                style: AppTextStyles.h1.copyWith(color: AppColors.primary),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              
               Text(
                 'Gerencie seus pets com sua família',
-                style: AppTextStyles.bodyLarge.copyWith(
-                  color: AppColors.textSecondary,
-                ),
+                style: AppTextStyles.bodyLarge.copyWith(color: AppColors.textSecondary),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 48),
-              
-              // Formulário de login
               Form(
                 key: _formKey,
                 child: Column(
                   children: [
-                    // Campo de email
                     TextFormField(
                       controller: _emailController,
                       keyboardType: TextInputType.emailAddress,
                       decoration: InputDecoration(
                         labelText: 'Email',
                         prefixIcon: const Icon(Icons.email_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                         filled: true,
                         fillColor: AppColors.surface,
                       ),
                       validator: Validators.email,
                     ),
                     const SizedBox(height: 16),
-                    
-                    // Campo de senha
                     TextFormField(
                       controller: _passwordController,
                       obscureText: _obscurePassword,
@@ -151,109 +113,74 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         labelText: 'Senha',
                         prefixIcon: const Icon(Icons.lock_outlined),
                         suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscurePassword ? Icons.visibility : Icons.visibility_off,
-                          ),
-                          onPressed: () {
-                            setState(() => _obscurePassword = !_obscurePassword);
-                          },
+                          icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
+                          onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                         ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                         filled: true,
                         fillColor: AppColors.surface,
                       ),
                       validator: Validators.password,
                     ),
                     const SizedBox(height: 24),
-                    
-                    // Botão de login
                     SizedBox(
                       width: double.infinity,
                       height: 50,
                       child: ElevatedButton(
-                        onPressed: _isLoading ? null : _signInWithEmailAndPassword,
+                        onPressed: _isLoading ? null : _login,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         child: _isLoading
                             ? const CircularProgressIndicator(color: Colors.white)
-                            : Text(
-                                'Entrar',
-                                style: AppTextStyles.buttonLarge,
-                              ),
+                            : Text('Entrar', style: AppTextStyles.buttonLarge),
                       ),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 24),
-              
-              // Divisor
               Row(
                 children: [
                   Expanded(child: Divider(color: AppColors.textHint)),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      'ou',
-                      style: AppTextStyles.bodyMedium.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
+                    child: Text('ou', style: AppTextStyles.bodyMedium.copyWith(color: AppColors.textSecondary)),
                   ),
                   Expanded(child: Divider(color: AppColors.textHint)),
                 ],
               ),
               const SizedBox(height: 24),
-              
-              // Botão do Google
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: OutlinedButton.icon(
-                  onPressed: _isLoading ? null : _signInWithGoogle,
+                  onPressed: _isLoading ? null : () async {
+                    setState(() => _isLoading = true);
+                    try {
+                      await ref.read(authNotifierProvider.notifier).signInWithGoogle();
+                    } finally {
+                      setState(() => _isLoading = false);
+                    }
+                  },
                   icon: const Icon(Icons.login),
-                  label: Text(
-                    'Entrar com Google',
-                    style: AppTextStyles.buttonMedium.copyWith(
-                      color: AppColors.primary,
-                    ),
-                  ),
+                  label: Text('Entrar com Google', style: AppTextStyles.buttonMedium.copyWith(color: AppColors.primary)),
                   style: OutlinedButton.styleFrom(
                     side: BorderSide(color: AppColors.primary),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ),
               const SizedBox(height: 32),
-              
-              // Link para registro
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    'Não tem uma conta? ',
-                    style: AppTextStyles.bodyMedium.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
+                  Text('Não tem uma conta? ', style: AppTextStyles.bodyMedium.copyWith(color: AppColors.textSecondary)),
                   TextButton(
                     onPressed: () => context.go('/register'),
-                    child: Text(
-                      'Cadastre-se',
-                      style: AppTextStyles.bodyMedium.copyWith(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    child: Text('Cadastre-se', style: AppTextStyles.bodyMedium.copyWith(color: AppColors.primary, fontWeight: FontWeight.w600)),
                   ),
                 ],
               ),
