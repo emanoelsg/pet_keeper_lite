@@ -1,128 +1,265 @@
 // main.dart
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:pet_keeper_lite/features/auth/screens/login_screen.dart';
+import 'package:pet_keeper_lite/features/auth/screens/register_screen.dart';
+import 'package:pet_keeper_lite/features/pets/screens/add_pet_screen.dart';
+import 'package:pet_keeper_lite/features/pets/screens/pet_details_screen.dart';
+import 'package:pet_keeper_lite/features/pets/screens/pets_screen.dart';
 import 'firebase_options.dart';
+import 'core/constants/app_colors.dart';
+import 'core/constants/app_text_styles.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  runApp(const MyApp());
+  runApp(const ProviderScope(child: PetKeeperApp()));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class PetKeeperApp extends ConsumerWidget {
+  const PetKeeperApp({super.key});
 
-  // This widget is the root of your application.
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
+  Widget build(BuildContext context, WidgetRef ref) {
+    return MaterialApp.router(
+      title: 'PetKeeper Lite',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: AppColors.primary,
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+        appBarTheme: AppBarTheme(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: AppColors.surface,
+        ),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      routerConfig: _router,
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+final _router = GoRouter(
+  initialLocation: '/',
+  redirect: (context, state) {
+    // Redirecionamento baseado no estado de autenticação será implementado aqui
+    return null; // Não redireciona, permite navegação normal
+  },
+  routes: [
+    GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
+    GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
+    GoRoute(
+      path: '/register',
+      builder: (context, state) => const RegisterScreen(),
+    ),
+    GoRoute(path: '/home', builder: (context, state) => const HomeScreen()),
+    GoRoute(path: '/pets', builder: (context, state) => const PetsScreen()),
+    GoRoute(
+      path: '/pet-details/:petId',
+      builder: (context, state) {
+        final petId = state.pathParameters['petId']!;
+        return PetDetailsScreen(petId: petId);
+      },
+    ),
+    GoRoute(
+      path: '/add-pet',
+      builder: (context, state) => const AddPetScreen(),
+    ),
+    GoRoute(
+      path: '/edit-pet/:petId',
+      builder: (context, state) {
+        final petId = state.pathParameters['petId']!;
+        return EditPetScreen(petId: petId);
+      },
+    ),
+    GoRoute(
+      path: '/add-task/:petId',
+      builder: (context, state) {
+        final petId = state.pathParameters['petId']!;
+        return AddTaskScreen(petId: petId);
+      },
+    ),
+    GoRoute(
+      path: '/edit-task/:taskId',
+      builder: (context, state) {
+        final taskId = state.pathParameters['taskId']!;
+        return EditTaskScreen(taskId: taskId);
+      },
+    ),
+    GoRoute(
+      path: '/profile',
+      builder: (context, state) => const ProfileScreen(),
+    ),
+    GoRoute(
+      path: '/family-settings',
+      builder: (context, state) => const FamilySettingsScreen(),
+    ),
+  ],
+);
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+// Placeholder screens - serão implementadas nas próximas etapas
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _navigate();
+  }
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  Future<void> _navigate() async {
+    final user = FirebaseAuth.instance.currentUser;
+    final isLoggedIn = user != null;
+    await Future.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+    if (isLoggedIn) {
+      context.go('/home');
+    } else {
+      context.go('/login');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
+      backgroundColor: AppColors.primary,
       body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
           mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
+          children: [
+            Icon(Icons.pets, size: 100, color: Colors.white),
+            const SizedBox(height: 24),
             Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+              'PetKeeper Lite',
+              style: AppTextStyles.h1.copyWith(color: Colors.white),
             ),
+            const SizedBox(height: 8),
+            Text(
+              'Gerencie seus pets com sua família',
+              style: AppTextStyles.bodyLarge.copyWith(color: Colors.white70),
+            ),
+            const SizedBox(height: 48),
+            const CircularProgressIndicator(color: Colors.white),
           ],
         ),
       ),
+    );
+  }
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('PetKeeper Lite'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () => context.go('/profile'),
+          ),
+        ],
+      ),
+      body: const Center(child: Text('Tela inicial - Em desenvolvimento')),
       floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
+        onPressed: () => context.go('/add-pet'),
         child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      ),
+    );
+  }
+}
+
+class EditPetScreen extends StatelessWidget {
+  final String petId;
+
+  const EditPetScreen({super.key, required this.petId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Editar Pet')),
+      body: Center(child: Text('Editar pet $petId - Em desenvolvimento')),
+    );
+  }
+}
+
+class AddTaskScreen extends StatelessWidget {
+  final String petId;
+
+  const AddTaskScreen({super.key, required this.petId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Adicionar Tarefa')),
+      body: Center(
+        child: Text('Adicionar tarefa para pet $petId - Em desenvolvimento'),
+      ),
+    );
+  }
+}
+
+class EditTaskScreen extends StatelessWidget {
+  final String taskId;
+
+  const EditTaskScreen({super.key, required this.taskId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Editar Tarefa')),
+      body: Center(child: Text('Editar tarefa $taskId - Em desenvolvimento')),
+    );
+  }
+}
+
+class ProfileScreen extends StatelessWidget {
+  const ProfileScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Perfil')),
+      body: const Center(child: Text('Perfil do usuário - Em desenvolvimento')),
+    );
+  }
+}
+
+class FamilySettingsScreen extends StatelessWidget {
+  const FamilySettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Configurações da Família')),
+      body: const Center(
+        child: Text('Configurações da família - Em desenvolvimento'),
+      ),
     );
   }
 }
