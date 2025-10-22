@@ -1,9 +1,10 @@
 // features/pets/services/firestore_service.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:pet_keeper_lite/features/pet_tasks/models/pet_task.dart';
+import 'package:pet_keeper_lite/features/pets/models/pet.dart';
 import 'package:uuid/uuid.dart';
-import '../../pets/models/pet.dart';
-import '../../pet_tasks/models/pet_task.dart';
+
 
 class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -13,30 +14,30 @@ class FirestoreService {
   // PETS
 
   // Stream de pets da família atual
-Stream<List<Pet>> getPetsStream() {
-  final currentUser = _auth.currentUser;
-  if (currentUser == null) {
-    return Stream.value([]);
-  }
-
-  return _firestore
-      .collection('users')
-      .doc(currentUser.uid)
-      .snapshots()
-      .asyncExpand((userDoc) {
-    if (!userDoc.exists) return Stream.value(<Pet>[]);
-
-    final familyCode = userDoc.data()!['familyCode'] as String;
+  Stream<List<Pet>> getPetsStream() {
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      return Stream.value([]);
+    }
 
     return _firestore
-        .collection('pets')
-        .where('familyCode', isEqualTo: familyCode)
-        .orderBy('createdAt', descending: true)
+        .collection('users')
+        .doc(currentUser.uid)
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => Pet.fromMap(doc.data())).toList());
-  });
-}
+        .asyncExpand((userDoc) {
+      if (!userDoc.exists || userDoc.data() == null) return Stream.value(<Pet>[]);
+
+      final familyCode = userDoc.data()!['familyCode'] as String;
+
+      return _firestore
+          .collection('pets')
+          .where('familyCode', isEqualTo: familyCode)
+          .orderBy('createdAt', descending: true)
+          .snapshots()
+          .map((snapshot) =>
+              snapshot.docs.map((doc) => Pet.fromMap(doc.data())).toList());
+    });
+  }
 
 
   // Obter pet por ID
@@ -70,7 +71,7 @@ Stream<List<Pet>> getPetsStream() {
           .doc(currentUser.uid)
           .get();
 
-      if (!userDoc.exists) {
+      if (!userDoc.exists || userDoc.data() == null) {
         throw Exception('Usuário não encontrado');
       }
 
@@ -126,20 +127,23 @@ Stream<List<Pet>> getPetsStream() {
   Future<void> deletePet(String petId) async {
     try {
       // Deletar todas as tarefas do pet primeiro
+      // IMPORTANTE: Para isso funcionar com as novas regras,
+      // a tarefa precisa ter o familyCode e o usuário precisa ser da família.
+      // E, para um batch delete, as regras são avaliadas para cada documento.
       final tasksSnapshot = await _firestore
           .collection('pet_tasks')
           .where('petId', isEqualTo: petId)
           .get();
 
       final batch = _firestore.batch();
-      
+
       for (final doc in tasksSnapshot.docs) {
         batch.delete(doc.reference);
       }
-      
+
       // Deletar o pet
       batch.delete(_firestore.collection('pets').doc(petId));
-      
+
       await batch.commit();
     } catch (e) {
       throw Exception('Erro ao deletar pet: $e');
@@ -149,7 +153,20 @@ Stream<List<Pet>> getPetsStream() {
   // PET TASKS
 
   // Stream de tarefas de um pet
+  // Esta query ainda funciona porque você está filtrando por petId,
+  // e as regras de segurança ainda exigirão que o familyCode da tarefa
+  // corresponda ao do usuário autenticado.
   Stream<List<PetTask>> getPetTasksStream(String petId) {
+    // Você pode adicionar a verificação de familyCode aqui para ser mais seguro no cliente
+    // se precisar filtrar antes da regra de segurança atuar.
+    // Exemplo:
+    // final currentUser = _auth.currentUser;
+    // if (currentUser == null) return Stream.value([]);
+    // final userDoc = await _firestore.collection('users').doc(currentUser.uid).get();
+    // if (!userDoc.exists || userDoc.data() == null) return Stream.value([]);
+    // final familyCode = userDoc.data()!['familyCode'] as String;
+    // return _firestore.collection('pet_tasks').where('petId', isEqualTo: petId).where('familyCode', isEqualTo: familyCode) ...
+    // No entanto, as regras de segurança já fazem isso, então a query atual é "segura".
     return _firestore
         .collection('pet_tasks')
         .where('petId', isEqualTo: petId)
@@ -160,46 +177,34 @@ Stream<List<Pet>> getPetsStream() {
             .toList());
   }
 
-  // Stream de todas as tarefas da família
- Stream<List<PetTask>> getAllTasksStream() {
-  final currentUser = _auth.currentUser;
-  if (currentUser == null) {
-    return Stream.value([]);
-  }
-
-  return _firestore
-      .collection('users')
-      .doc(currentUser.uid)
-      .snapshots()
-      .asyncExpand((userDoc) async* {
-    if (!userDoc.exists) {
-      yield <PetTask>[];
-      return;
+  // Stream de todas as tarefas da família (REFATORADO)
+  Stream<List<PetTask>> getAllTasksStream() {
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      return Stream.value([]);
     }
 
-    final familyCode = userDoc.data()!['familyCode'] as String;
-
-    final petsSnapshot = await _firestore
-        .collection('pets')
-        .where('familyCode', isEqualTo: familyCode)
-        .get();
-
-    final petIds = petsSnapshot.docs.map((doc) => doc.id).toList();
-
-    if (petIds.isEmpty) {
-      yield <PetTask>[];
-      return;
-    }
-
-    yield* _firestore
-        .collection('pet_tasks')
-        .where('petId', whereIn: petIds)
-        .orderBy('dueDate', descending: false)
+    return _firestore
+        .collection('users')
+        .doc(currentUser.uid)
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => PetTask.fromMap(doc.data())).toList());
-  });
-}
+        .asyncExpand((userDoc) {
+      if (!userDoc.exists || userDoc.data() == null) {
+        return Stream.value(<PetTask>[]);
+      }
+
+      final familyCode = userDoc.data()!['familyCode'] as String;
+
+      // Consulta diretamente as tarefas pelo familyCode
+      return _firestore
+          .collection('pet_tasks')
+          .where('familyCode', isEqualTo: familyCode)
+          .orderBy('dueDate', descending: false)
+          .snapshots()
+          .map((snapshot) =>
+              snapshot.docs.map((doc) => PetTask.fromMap(doc.data())).toList());
+    });
+  }
 
 
   // Obter tarefa por ID
@@ -215,7 +220,7 @@ Stream<List<Pet>> getPetsStream() {
     }
   }
 
-  // Adicionar tarefa
+  // Adicionar tarefa (MODIFICADO)
   Future<String> addTask({
     required String petId,
     required PetTaskType type,
@@ -227,11 +232,19 @@ Stream<List<Pet>> getPetsStream() {
       final currentUser = _auth.currentUser;
       if (currentUser == null) throw Exception('Usuário não autenticado');
 
+      // 1. Obter o Pet para buscar o familyCode
+      final petDoc = await _firestore.collection('pets').doc(petId).get();
+      if (!petDoc.exists || petDoc.data() == null) {
+        throw Exception('Pet não encontrado para adicionar a tarefa');
+      }
+      final petFamilyCode = petDoc.data()!['familyCode'] as String;
+
       final taskId = _uuid.v4();
 
       final task = PetTask(
         id: taskId,
         petId: petId,
+        familyCode: petFamilyCode, // AGORA PASSAMOS O familyCode
         type: type,
         title: title,
         dueDate: dueDate,
@@ -312,7 +325,7 @@ Stream<List<Pet>> getPetsStream() {
           .doc(currentUser.uid)
           .get();
 
-      if (!userDoc.exists) return null;
+      if (!userDoc.exists || userDoc.data() == null) return null;
 
       final familyCode = userDoc.data()!['familyCode'] as String;
       final familyDoc = await _firestore
@@ -341,7 +354,7 @@ Stream<List<Pet>> getPetsStream() {
           .doc(currentUser.uid)
           .get();
 
-      if (!userDoc.exists) return [];
+      if (!userDoc.exists || userDoc.data() == null) return [];
 
       final familyCode = userDoc.data()!['familyCode'] as String;
       final membersSnapshot = await _firestore
@@ -355,4 +368,3 @@ Stream<List<Pet>> getPetsStream() {
     }
   }
 }
-
