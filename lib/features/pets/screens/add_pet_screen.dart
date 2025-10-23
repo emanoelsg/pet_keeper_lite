@@ -1,8 +1,10 @@
 // features/pets/screens/add_pet_screen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_text_styles.dart';
 import '../../../core/utils/validators.dart';
@@ -21,11 +23,10 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _weightController = TextEditingController();
-  
+
   PetSpecies _selectedSpecies = PetSpecies.dog;
   DateTime? _selectedBirthDate;
-  String? _selectedImagePath;
-  bool _isLoading = false;
+  File? _selectedImageFile;
 
   @override
   void dispose() {
@@ -34,36 +35,45 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
     super.dispose();
   }
 
-  Future<void> _selectImage() async {
+  Future<void> _selectImageSource() async {
     showModalBottomSheet(
       context: context,
+      backgroundColor: AppColors.surface,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('Câmera'),
+              leading: Icon(Icons.camera_alt, color: AppColors.primary),
+              title: Text('Câmera', style: AppTextStyles.bodyLarge),
               onTap: () async {
                 Navigator.pop(context);
-                final imagePath = await ref
-                    .read(photoUploadNotifierProvider.notifier)
-                    .pickImageFromCamera();
-                if (imagePath != null) {
-                  setState(() => _selectedImagePath = imagePath);
+                try {
+                  final imageFile = await ref
+                      .read(photoUploadNotifierProvider.notifier)
+                      .pickImageFromCamera();
+                  if (imageFile != null) {
+                    setState(() => _selectedImageFile = imageFile);
+                  }
+                } catch (e) {
+                  _showErrorSnackBar('Erro ao capturar imagem: $e');
                 }
               },
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('Galeria'),
+              leading: Icon(Icons.photo_library, color: AppColors.primary),
+              title: Text('Galeria', style: AppTextStyles.bodyLarge),
               onTap: () async {
                 Navigator.pop(context);
-                final imagePath = await ref
-                    .read(photoUploadNotifierProvider.notifier)
-                    .pickImageFromGallery();
-                if (imagePath != null) {
-                  setState(() => _selectedImagePath = imagePath);
+                try {
+                  final imageFile = await ref
+                      .read(photoUploadNotifierProvider.notifier)
+                      .pickImageFromGallery();
+                  if (imageFile != null) {
+                    setState(() => _selectedImageFile = imageFile);
+                  }
+                } catch (e) {
+                  _showErrorSnackBar('Erro ao selecionar imagem: $e');
                 }
               },
             ),
@@ -77,10 +87,25 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
     final date = await showDatePicker(
       context: context,
       initialDate: DateTime.now().subtract(const Duration(days: 365)),
-      firstDate: DateTime(2000),
+      firstDate: DateTime(1990),
       lastDate: DateTime.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: AppColors.primary,
+              onPrimary: Colors.white,
+              onSurface: AppColors.textPrimary,
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
-    
+
     if (date != null) {
       setState(() => _selectedBirthDate = date);
     }
@@ -89,78 +114,113 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
   Future<void> _savePet() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedBirthDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Selecione a data de nascimento'),
-          backgroundColor: AppColors.error,
-        ),
-      );
+      _showErrorSnackBar('Selecione a data de nascimento do pet.');
       return;
     }
 
-    setState(() => _isLoading = true);
+    final currentContext = context;
 
     try {
-      String? photoUrl;
-      
-      // Upload da foto se selecionada
-      if (_selectedImagePath != null) {
-        photoUrl = await ref
+      final newPetId = await ref
+          .read(petsNotifierProvider.notifier)
+          .addPet(
+            name: _nameController.text.trim(),
+            species: _selectedSpecies,
+            birthDate: _selectedBirthDate!,
+            weightKg: double.parse(_weightController.text.replaceAll(',', '.')),
+          );
+
+      if (_selectedImageFile != null) {
+        final photoUrl = await ref
             .read(photoUploadNotifierProvider.notifier)
             .uploadPetPhoto(
-              petId: '', // Será gerado pelo Firestore
-              imagePath: _selectedImagePath!,
+              petId: newPetId,
+              imagePath: _selectedImageFile!.path,
             );
+
+        await ref
+            .read(petsNotifierProvider.notifier)
+            .updatePet(petId: newPetId, photoUrl: photoUrl);
       }
 
-      // Adicionar pet
-      await ref.read(petsNotifierProvider.notifier).addPet(
-        name: _nameController.text.trim(),
-        species: _selectedSpecies,
-        birthDate: _selectedBirthDate!,
-        weightKg: double.parse(_weightController.text.replaceAll(',', '.')),
-        photoUrl: photoUrl,
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Pet adicionado com sucesso!'),
+      if (currentContext.mounted) {
+        ScaffoldMessenger.of(currentContext).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Pet adicionado com sucesso!',
+              style: AppTextStyles.bodyMedium.copyWith(
+                color: AppColors.surface,
+              ),
+            ),
             backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
           ),
         );
-        context.go('/pets');
+        currentContext.go('/pets');
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao adicionar pet: $e'),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      _showErrorSnackBar('Erro ao adicionar pet: $e');
     }
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: AppTextStyles.bodyMedium.copyWith(color: AppColors.surface),
+        ),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final petsLoadingState = ref.watch(petsNotifierProvider);
+    final photoUploadLoadingState = ref.watch(photoUploadNotifierProvider);
+
+    final isLoading =
+        petsLoadingState is AsyncLoading ||
+        photoUploadLoadingState is AsyncLoading;
+
+    ref.listen<AsyncValue<void>>(petsNotifierProvider, (previous, next) {
+      next.whenOrNull(
+        error: (error, stackTrace) {
+          _showErrorSnackBar('Erro ao adicionar pet: ${error.toString()}');
+        },
+      );
+    });
+
+    ref.listen<AsyncValue<String?>>(photoUploadNotifierProvider, (
+      previous,
+      next,
+    ) {
+      next.whenOrNull(
+        error: (error, stackTrace) {
+          _showErrorSnackBar(
+            'Erro ao fazer upload da foto: ${error.toString()}',
+          );
+        },
+      );
+    });
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Adicionar Pet'),
+        title: Text(
+          'Adicionar Pet',
+          style: AppTextStyles.h3.copyWith(color: Colors.white),
+        ),
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         actions: [
           TextButton(
-            onPressed: _isLoading ? null : _savePet,
+            onPressed: isLoading ? null : _savePet,
             child: Text(
               'Salvar',
               style: AppTextStyles.buttonMedium.copyWith(
-                color: Colors.white,
+                color: isLoading ? Colors.white.withOpacity(0.5) : Colors.white,
               ),
             ),
           ),
@@ -173,10 +233,9 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Foto do pet
               Center(
                 child: GestureDetector(
-                  onTap: _selectImage,
+                  onTap: _selectImageSource,
                   child: Container(
                     width: 120,
                     height: 120,
@@ -187,12 +246,20 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
                         color: AppColors.textHint.withOpacity(0.3),
                         width: 2,
                       ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.textHint.withOpacity(0.2),
+                          spreadRadius: 1,
+                          blurRadius: 3,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
-                    child: _selectedImagePath != null
+                    child: _selectedImageFile != null
                         ? ClipRRect(
                             borderRadius: BorderRadius.circular(12),
                             child: Image.file(
-                              File(_selectedImagePath!),
+                              _selectedImageFile!,
                               fit: BoxFit.cover,
                             ),
                           )
@@ -218,28 +285,65 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Nome do pet
               TextFormField(
                 controller: _nameController,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Nome do pet',
-                  prefixIcon: Icon(Icons.pets),
+                  prefixIcon: Icon(Icons.pets, color: AppColors.textSecondary),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  filled: true,
+                  fillColor: AppColors.surface,
+                  labelStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  hintStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.textHint,
+                  ),
+                  errorStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.error,
+                  ),
                 ),
                 validator: Validators.petName,
+                style: AppTextStyles.bodyMedium.copyWith(
+                  color: AppColors.textPrimary,
+                ),
               ),
               const SizedBox(height: 16),
 
-              // Espécie
               DropdownButtonFormField<PetSpecies>(
                 value: _selectedSpecies,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Espécie',
-                  prefixIcon: Icon(Icons.category),
+                  prefixIcon: Icon(
+                    Icons.category,
+                    color: AppColors.textSecondary,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  filled: true,
+                  fillColor: AppColors.surface,
+                  labelStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  hintStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.textHint,
+                  ),
+                  errorStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.error,
+                  ),
                 ),
                 items: PetSpecies.values.map((species) {
                   return DropdownMenuItem(
                     value: species,
-                    child: Text(species.displayName),
+                    child: Text(
+                      species.displayName,
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
                   );
                 }).toList(),
                 onChanged: (value) {
@@ -247,24 +351,47 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
                     setState(() => _selectedSpecies = value);
                   }
                 },
-                validator: (value) => value == null ? Validators.species(value.toString()) : null,
+                validator: (value) =>
+                    value == null ? Validators.species("null") : null,
+                dropdownColor: AppColors.surface,
+                style: AppTextStyles.bodyMedium.copyWith(
+                  color: AppColors.textPrimary,
+                ),
               ),
               const SizedBox(height: 16),
 
-              // Data de nascimento
               InkWell(
                 onTap: _selectBirthDate,
                 child: InputDecorator(
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Data de nascimento',
-                    prefixIcon: Icon(Icons.calendar_today),
+                    prefixIcon: Icon(
+                      Icons.calendar_today,
+                      color: AppColors.textSecondary,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: AppColors.surface,
+                    labelStyle: AppTextStyles.bodyMedium.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                    hintStyle: AppTextStyles.bodyMedium.copyWith(
+                      color: AppColors.textHint,
+                    ),
+                    errorStyle: AppTextStyles.bodyMedium.copyWith(
+                      color: AppColors.error,
+                    ),
                   ),
                   child: Text(
                     _selectedBirthDate != null
-                        ? '${_selectedBirthDate!.day}/${_selectedBirthDate!.month}/${_selectedBirthDate!.year}'
+                        ? DateFormat('dd/MM/yyyy').format(_selectedBirthDate!)
                         : 'Selecione a data',
                     style: _selectedBirthDate != null
-                        ? AppTextStyles.bodyMedium
+                        ? AppTextStyles.bodyMedium.copyWith(
+                            color: AppColors.textPrimary,
+                          )
                         : AppTextStyles.bodyMedium.copyWith(
                             color: AppColors.textHint,
                           ),
@@ -273,34 +400,56 @@ class _AddPetScreenState extends ConsumerState<AddPetScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Peso
               TextFormField(
                 controller: _weightController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
                   labelText: 'Peso (kg)',
-                  prefixIcon: Icon(Icons.monitor_weight),
+                  prefixIcon: Icon(
+                    Icons.monitor_weight,
+                    color: AppColors.textSecondary,
+                  ),
                   suffixText: 'kg',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  filled: true,
+                  fillColor: AppColors.surface,
+                  labelStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  hintStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.textHint,
+                  ),
+                  errorStyle: AppTextStyles.bodyMedium.copyWith(
+                    color: AppColors.error,
+                  ),
                 ),
                 validator: Validators.weight,
+                style: AppTextStyles.bodyMedium.copyWith(
+                  color: AppColors.textPrimary,
+                ),
               ),
               const SizedBox(height: 32),
 
-              // Botão salvar
               SizedBox(
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _savePet,
+                  onPressed: isLoading ? null : _savePet,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
+                    foregroundColor: AppColors.surface,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
-                  child: _isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : Text(
-                          'Adicionar Pet',
-                          style: AppTextStyles.buttonLarge,
-                        ),
+                  child: isLoading
+                      ? const CircularProgressIndicator(
+                          color: AppColors.surface,
+                        )
+                      : Text('Adicionar Pet', style: AppTextStyles.buttonLarge),
                 ),
               ),
             ],

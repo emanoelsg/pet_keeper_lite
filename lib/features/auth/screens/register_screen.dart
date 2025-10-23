@@ -1,4 +1,5 @@
 // features/auth/screens/register_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,7 @@ import '../../../core/constants/app_text_styles.dart';
 import '../../../core/utils/validators.dart';
 import '../providers/auth_provider.dart';
 import '../../../core/constants/app_colors.dart';
+import '../models/user.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
@@ -24,7 +26,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _familyCodeController = TextEditingController();
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
-  bool _isLoading = false;
   bool _isCreatingFamily = true;
   final Uuid _uuid = const Uuid();
 
@@ -60,80 +61,58 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     return null;
   }
 
-  Future<void> _createAccount() async {
+  Future<void> _handleRegistration() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
-
     try {
-      await ref.read(authNotifierProvider.notifier).createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-        displayName: _nameController.text.trim(),
-        familyCode: _familyCodeController.text.trim(),
-      );
-      
-      if (mounted) {
-        context.go('/home');
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString()),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-  }
-
-  Future<void> _joinFamily() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      // Primeiro criar a conta
-      await ref.read(authNotifierProvider.notifier).createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-        displayName: _nameController.text.trim(),
-        familyCode: _familyCodeController.text.trim(),
-      );
-      
-      if (mounted) {
-        context.go('/home');
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString()),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
+      await ref
+          .read(authNotifierProvider.notifier)
+          .createUserWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text,
+            displayName: _nameController.text.trim(),
+            familyCode: _familyCodeController.text.trim(),
+          );
+    } catch (e) {}
   }
 
   @override
   Widget build(BuildContext context) {
+    final authState = ref.watch(authNotifierProvider);
+    final isLoading = authState is AsyncLoading;
+
+    ref.listen<AsyncValue<User?>>(authNotifierProvider, (previous, next) {
+      next.whenOrNull(
+        data: (user) {
+          if (user != null) {
+            context.go('/home');
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          }
+        },
+        error: (err, stack) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                err.toString(),
+                style: AppTextStyles.bodyMedium.copyWith(
+                  color: AppColors.surface,
+                ),
+              ),
+              backgroundColor: AppColors.error,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        },
+      );
+    });
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
+          icon: Icon(Icons.arrow_back, color: AppColors.textPrimary),
           onPressed: () => context.go('/login'),
         ),
       ),
@@ -144,17 +123,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 20),
-              
-              // Título
+
               Text(
                 'Criar Conta',
-                style: AppTextStyles.h1.copyWith(
-                  color: AppColors.primary,
-                ),
+                style: AppTextStyles.h1.copyWith(color: AppColors.primary),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              
+
               Text(
                 'Cadastre-se para começar a cuidar dos seus pets',
                 style: AppTextStyles.bodyLarge.copyWith(
@@ -163,12 +139,19 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 32),
-              
-              // Toggle para criar/entrar na família
+
               Container(
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.textHint.withOpacity(0.2),
+                      spreadRadius: 1,
+                      blurRadius: 5,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
                 ),
                 child: Row(
                   children: [
@@ -180,16 +163,24 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                             _familyCodeController.text = _generateFamilyCode();
                           });
                         },
-                        child: Container(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
-                            color: _isCreatingFamily ? AppColors.primary : Colors.transparent,
+                            color: _isCreatingFamily
+                                ? AppColors.primary
+                                : Colors.transparent,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
                             'Criar Família',
                             style: AppTextStyles.buttonMedium.copyWith(
-                              color: _isCreatingFamily ? Colors.white : AppColors.textSecondary,
+                              color: _isCreatingFamily
+                                  ? Colors.white
+                                  : AppColors.textSecondary,
+                              fontWeight: _isCreatingFamily
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
                             ),
                             textAlign: TextAlign.center,
                           ),
@@ -204,16 +195,24 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                             _familyCodeController.clear();
                           });
                         },
-                        child: Container(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
-                            color: !_isCreatingFamily ? AppColors.primary : Colors.transparent,
+                            color: !_isCreatingFamily
+                                ? AppColors.primary
+                                : Colors.transparent,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
                             'Entrar na Família',
                             style: AppTextStyles.buttonMedium.copyWith(
-                              color: !_isCreatingFamily ? Colors.white : AppColors.textSecondary,
+                              color: !_isCreatingFamily
+                                  ? Colors.white
+                                  : AppColors.textSecondary,
+                              fontWeight: !_isCreatingFamily
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
                             ),
                             textAlign: TextAlign.center,
                           ),
@@ -224,58 +223,92 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              
-              // Formulário
+
               Form(
                 key: _formKey,
                 child: Column(
                   children: [
-                    // Campo de nome
                     TextFormField(
                       controller: _nameController,
                       decoration: InputDecoration(
                         labelText: 'Nome completo',
-                        prefixIcon: const Icon(Icons.person_outlined),
+                        prefixIcon: Icon(
+                          Icons.person_outlined,
+                          color: AppColors.textSecondary,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                         filled: true,
                         fillColor: AppColors.surface,
+                        labelStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        hintStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textHint,
+                        ),
+                        errorStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.error,
+                        ),
                       ),
                       validator: Validators.name,
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                     const SizedBox(height: 16),
-                    
-                    // Campo de email
+
                     TextFormField(
                       controller: _emailController,
                       keyboardType: TextInputType.emailAddress,
                       decoration: InputDecoration(
                         labelText: 'Email',
-                        prefixIcon: const Icon(Icons.email_outlined),
+                        prefixIcon: Icon(
+                          Icons.email_outlined,
+                          color: AppColors.textSecondary,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                         filled: true,
                         fillColor: AppColors.surface,
+                        labelStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        hintStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textHint,
+                        ),
+                        errorStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.error,
+                        ),
                       ),
                       validator: Validators.email,
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                     const SizedBox(height: 16),
-                    
-                    // Campo de senha
+
                     TextFormField(
                       controller: _passwordController,
                       obscureText: _obscurePassword,
                       decoration: InputDecoration(
                         labelText: 'Senha',
-                        prefixIcon: const Icon(Icons.lock_outlined),
+                        prefixIcon: Icon(
+                          Icons.lock_outlined,
+                          color: AppColors.textSecondary,
+                        ),
                         suffixIcon: IconButton(
                           icon: Icon(
-                            _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                            _obscurePassword
+                                ? Icons.visibility
+                                : Icons.visibility_off,
+                            color: AppColors.textSecondary,
                           ),
                           onPressed: () {
-                            setState(() => _obscurePassword = !_obscurePassword);
+                            setState(
+                              () => _obscurePassword = !_obscurePassword,
+                            );
                           },
                         ),
                         border: OutlineInputBorder(
@@ -283,24 +316,44 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         ),
                         filled: true,
                         fillColor: AppColors.surface,
+                        labelStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        hintStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textHint,
+                        ),
+                        errorStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.error,
+                        ),
                       ),
                       validator: Validators.password,
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                     const SizedBox(height: 16),
-                    
-                    // Campo de confirmação de senha
+
                     TextFormField(
                       controller: _confirmPasswordController,
                       obscureText: _obscureConfirmPassword,
                       decoration: InputDecoration(
                         labelText: 'Confirmar senha',
-                        prefixIcon: const Icon(Icons.lock_outlined),
+                        prefixIcon: Icon(
+                          Icons.lock_outlined,
+                          color: AppColors.textSecondary,
+                        ),
                         suffixIcon: IconButton(
                           icon: Icon(
-                            _obscureConfirmPassword ? Icons.visibility : Icons.visibility_off,
+                            _obscureConfirmPassword
+                                ? Icons.visibility
+                                : Icons.visibility_off,
+                            color: AppColors.textSecondary,
                           ),
                           onPressed: () {
-                            setState(() => _obscureConfirmPassword = !_obscureConfirmPassword);
+                            setState(
+                              () => _obscureConfirmPassword =
+                                  !_obscureConfirmPassword,
+                            );
                           },
                         ),
                         border: OutlineInputBorder(
@@ -308,24 +361,44 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         ),
                         filled: true,
                         fillColor: AppColors.surface,
+                        labelStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        hintStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textHint,
+                        ),
+                        errorStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.error,
+                        ),
                       ),
                       validator: _validateConfirmPassword,
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                     const SizedBox(height: 16),
-                    
-                    // Campo de código da família
+
                     TextFormField(
                       controller: _familyCodeController,
                       readOnly: _isCreatingFamily,
                       decoration: InputDecoration(
-                        labelText: _isCreatingFamily ? 'Código da família (gerado automaticamente)' : 'Código da família',
-                        prefixIcon: const Icon(Icons.family_restroom),
+                        labelText: _isCreatingFamily
+                            ? 'Código da família (gerado automaticamente)'
+                            : 'Código da família',
+                        prefixIcon: Icon(
+                          Icons.family_restroom,
+                          color: AppColors.textSecondary,
+                        ),
                         suffixIcon: _isCreatingFamily
                             ? IconButton(
-                                icon: const Icon(Icons.refresh),
+                                icon: Icon(
+                                  Icons.refresh,
+                                  color: AppColors.textSecondary,
+                                ),
                                 onPressed: () {
                                   setState(() {
-                                    _familyCodeController.text = _generateFamilyCode();
+                                    _familyCodeController.text =
+                                        _generateFamilyCode();
                                   });
                                 },
                               )
@@ -335,28 +408,43 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         ),
                         filled: true,
                         fillColor: AppColors.surface,
+                        labelStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        hintStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.textHint,
+                        ),
+                        errorStyle: AppTextStyles.bodyMedium.copyWith(
+                          color: AppColors.error,
+                        ),
                       ),
                       validator: Validators.familyCode,
+                      style: AppTextStyles.bodyMedium.copyWith(
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                     const SizedBox(height: 24),
-                    
-                    // Botão de cadastro
+
                     SizedBox(
                       width: double.infinity,
                       height: 50,
                       child: ElevatedButton(
-                        onPressed: _isLoading ? null : (_isCreatingFamily ? _createAccount : _joinFamily),
+                        onPressed: isLoading ? null : _handleRegistration,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
-                          foregroundColor: Colors.white,
+                          foregroundColor: AppColors.surface,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
                         ),
-                        child: _isLoading
-                            ? const CircularProgressIndicator(color: Colors.white)
+                        child: isLoading
+                            ? const CircularProgressIndicator(
+                                color: AppColors.surface,
+                              )
                             : Text(
-                                _isCreatingFamily ? 'Criar Conta e Família' : 'Entrar na Família',
+                                _isCreatingFamily
+                                    ? 'Criar Conta e Família'
+                                    : 'Registrar e Entrar na Família',
                                 style: AppTextStyles.buttonLarge,
                               ),
                       ),
@@ -365,8 +453,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              
-              // Link para login
+
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [

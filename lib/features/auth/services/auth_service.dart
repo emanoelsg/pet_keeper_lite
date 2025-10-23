@@ -1,4 +1,5 @@
 // features/auth/services/auth_service.dart
+
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -15,16 +16,13 @@ class AuthService {
 
   final Uuid _uuid = const Uuid();
 
-  // Stream do usuário atual
   Stream<firebase_auth.User?> get authStateChanges => _auth.authStateChanges();
 
-  // Usuário atual
   firebase_auth.User? get currentUser => _auth.currentUser;
   Future<void> init() async {
     await GoogleSignIn.instance.initialize();
   }
 
-  // Login com email e senha
   Future<firebase_auth.User?> signInWithEmailAndPassword({
     required String email,
     required String password,
@@ -45,7 +43,6 @@ class AuthService {
     }
   }
 
-  // Registro com email e senha
   Future<firebase_auth.User?> createUserWithEmailAndPassword({
     required String email,
     required String password,
@@ -53,17 +50,14 @@ class AuthService {
     required String familyCode,
   }) async {
     try {
-      // Criar usuário no Firebase Auth
       final credential = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
 
       if (credential.user != null) {
-        // Atualizar display name
         await credential.user!.updateDisplayName(displayName);
 
-        // Criar documento do usuário no Firestore
         await _createUserDocument(
           uid: credential.user!.uid,
           displayName: displayName,
@@ -71,10 +65,8 @@ class AuthService {
           familyCode: familyCode,
         );
 
-        // Criar documento da família no Firestore
         await _createFamilyDocument(familyCode, credential.user!.uid);
 
-        // Atualizar FCM token
         await _updateFcmToken();
       }
 
@@ -84,7 +76,6 @@ class AuthService {
     }
   }
 
-  // Login com Google
   Future<firebase_auth.User?> signInWithGoogle() async {
     try {
       final GoogleSignInAccount googleUser = await _googleSignIn.authenticate();
@@ -121,13 +112,11 @@ class AuthService {
     }
   }
 
-  // Entrar em uma família existente
   Future<void> joinFamily(String familyCode) async {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) throw Exception('Usuário não autenticado');
 
-      // Verificar se a família existe
       final familyDoc = await _firestore
           .collection('families')
           .doc(familyCode)
@@ -137,7 +126,6 @@ class AuthService {
         throw Exception('Código da família inválido');
       }
 
-      // Atualizar documento do usuário
       await _firestore.collection('users').doc(currentUser.uid).update({
         'familyCode': familyCode,
         'updatedAt': Timestamp.now(),
@@ -147,7 +135,6 @@ class AuthService {
     }
   }
 
-  // Logout
   Future<void> signOut() async {
     try {
       await Future.wait([_auth.signOut(), _googleSignIn.signOut()]);
@@ -156,23 +143,19 @@ class AuthService {
     }
   }
 
-  // Deletar conta
   Future<void> deleteAccount() async {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) throw Exception('Usuário não autenticado');
 
-      // Deletar documento do usuário
       await _firestore.collection('users').doc(currentUser.uid).delete();
 
-      // Deletar conta do Firebase Auth
       await currentUser.delete();
     } catch (e) {
       throw Exception('Erro ao deletar conta: $e');
     }
   }
 
-  // Obter dados do usuário atual
   Future<User?> getCurrentUserData() async {
     try {
       final currentUser = _auth.currentUser;
@@ -193,7 +176,6 @@ class AuthService {
     }
   }
 
-  // Atualizar dados do usuário
   Future<void> updateUserData({String? displayName, String? familyCode}) async {
     try {
       final currentUser = _auth.currentUser;
@@ -218,8 +200,6 @@ class AuthService {
       throw Exception('Erro ao atualizar dados do usuário: $e');
     }
   }
-
-  // Métodos privados
 
   Future<void> _createUserDocument({
     required String uid,
@@ -277,7 +257,6 @@ class AuthService {
         }
       }
     } catch (e) {
-      // Falha silenciosa - não é crítico
       debugPrint('Erro ao atualizar FCM token: $e');
     }
   }

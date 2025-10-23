@@ -1,4 +1,5 @@
 // main.dart
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -9,13 +10,23 @@ import 'package:pet_keeper_lite/features/auth/screens/register_screen.dart';
 import 'package:pet_keeper_lite/features/pets/screens/add_pet_screen.dart';
 import 'package:pet_keeper_lite/features/pets/screens/pet_details_screen.dart';
 import 'package:pet_keeper_lite/features/pets/screens/pets_screen.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'firebase_options.dart';
 import 'core/constants/app_colors.dart';
 import 'core/constants/app_text_styles.dart';
 
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  debugPrint("Handling a background message: ${message.messageId}");
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
   runApp(const ProviderScope(child: PetKeeperApp()));
 }
 
@@ -60,8 +71,24 @@ class PetKeeperApp extends ConsumerWidget {
 final _router = GoRouter(
   initialLocation: '/',
   redirect: (context, state) {
-    // Redirecionamento baseado no estado de autenticação será implementado aqui
-    return null; // Não redireciona, permite navegação normal
+    final isLoggedIn = FirebaseAuth.instance.currentUser != null;
+    final isLoggingIn =
+        state.matchedLocation == '/login' ||
+        state.matchedLocation == '/register';
+
+    if (!isLoggedIn && !isLoggingIn && state.matchedLocation != '/') {
+      return '/login';
+    }
+
+    if (isLoggedIn && isLoggingIn) {
+      return '/pets';
+    }
+
+    if (state.matchedLocation == '/') {
+      return null;
+    }
+
+    return null;
   },
   routes: [
     GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
@@ -70,7 +97,6 @@ final _router = GoRouter(
       path: '/register',
       builder: (context, state) => const RegisterScreen(),
     ),
-    GoRoute(path: '/home', builder: (context, state) => const HomeScreen()),
     GoRoute(path: '/pets', builder: (context, state) => const PetsScreen()),
     GoRoute(
       path: '/pet-details/:petId',
@@ -83,39 +109,9 @@ final _router = GoRouter(
       path: '/add-pet',
       builder: (context, state) => const AddPetScreen(),
     ),
-    GoRoute(
-      path: '/edit-pet/:petId',
-      builder: (context, state) {
-        final petId = state.pathParameters['petId']!;
-        return EditPetScreen(petId: petId);
-      },
-    ),
-    GoRoute(
-      path: '/add-task/:petId',
-      builder: (context, state) {
-        final petId = state.pathParameters['petId']!;
-        return AddTaskScreen(petId: petId);
-      },
-    ),
-    GoRoute(
-      path: '/edit-task/:taskId',
-      builder: (context, state) {
-        final taskId = state.pathParameters['taskId']!;
-        return EditTaskScreen(taskId: taskId);
-      },
-    ),
-    GoRoute(
-      path: '/profile',
-      builder: (context, state) => const ProfileScreen(),
-    ),
-    GoRoute(
-      path: '/family-settings',
-      builder: (context, state) => const FamilySettingsScreen(),
-    ),
   ],
 );
 
-// Placeholder screens - serão implementadas nas próximas etapas
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -127,7 +123,86 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
+    _initializeFirebaseMessaging();
     _navigate();
+  }
+
+  Future<void> _initializeFirebaseMessaging() async {
+    NotificationSettings settings = await FirebaseMessaging.instance
+        .requestPermission(
+          alert: true,
+          badge: true,
+          provisional: false,
+          sound: true,
+        );
+
+    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      debugPrint('Permissão de notificação concedida');
+
+      final token = await FirebaseMessaging.instance.getToken();
+      debugPrint("FCM Token: $token");
+
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        debugPrint('Recebida mensagem em FOREGROUND!');
+        debugPrint('Dados da mensagem: ${message.data}');
+        if (message.notification != null) {
+          debugPrint(
+            'Notificação: ${message.notification?.title} - ${message.notification?.body}',
+          );
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                message.notification?.title ??
+                    ': ${message.notification!.body!}',
+              ),
+              action: SnackBarAction(
+                label: 'VER',
+                onPressed: () {
+                  _handleNotificationNavigation(message.data);
+                },
+              ),
+            ),
+          );
+        }
+      });
+
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        debugPrint('Usuário clicou na notificação (APP ESTAVA EM BACKGROUND)!');
+        debugPrint('Dados da mensagem: ${message.data}');
+        _handleNotificationNavigation(message.data);
+      });
+
+      FirebaseMessaging.instance.getInitialMessage().then((
+        RemoteMessage? message,
+      ) {
+        if (message != null) {
+          debugPrint('App iniciado por notificação (APP ESTAVA TERMINATED)!');
+          debugPrint('Dados da mensagem: ${message.data}');
+          _handleNotificationNavigation(message.data);
+        }
+      });
+    } else {
+      debugPrint(
+        'Permissão de notificação negada ou pendente. As notificações não funcionarão.',
+      );
+    }
+
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
+  }
+
+  void _handleNotificationNavigation(Map<String, dynamic> data) {
+    final type = data['type'];
+    final petId = data['petId'];
+
+    if (petId != null) {
+      context.go('/pet-details/$petId');
+    } else if (type == 'custom_message') {}
   }
 
   Future<void> _navigate() async {
@@ -135,8 +210,9 @@ class _SplashScreenState extends State<SplashScreen> {
     final isLoggedIn = user != null;
     await Future.delayed(const Duration(seconds: 2));
     if (!mounted) return;
+
     if (isLoggedIn) {
-      context.go('/home');
+      context.go('/pets');
     } else {
       context.go('/login');
     }
@@ -165,100 +241,6 @@ class _SplashScreenState extends State<SplashScreen> {
             const CircularProgressIndicator(color: Colors.white),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('PetKeeper Lite'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person),
-            onPressed: () => context.go('/profile'),
-          ),
-        ],
-      ),
-      body: const Center(child: Text('Tela inicial - Em desenvolvimento')),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => context.go('/add-pet'),
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
-}
-
-class EditPetScreen extends StatelessWidget {
-  final String petId;
-
-  const EditPetScreen({super.key, required this.petId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Editar Pet')),
-      body: Center(child: Text('Editar pet $petId - Em desenvolvimento')),
-    );
-  }
-}
-
-class AddTaskScreen extends StatelessWidget {
-  final String petId;
-
-  const AddTaskScreen({super.key, required this.petId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Adicionar Tarefa')),
-      body: Center(
-        child: Text('Adicionar tarefa para pet $petId - Em desenvolvimento'),
-      ),
-    );
-  }
-}
-
-class EditTaskScreen extends StatelessWidget {
-  final String taskId;
-
-  const EditTaskScreen({super.key, required this.taskId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Editar Tarefa')),
-      body: Center(child: Text('Editar tarefa $taskId - Em desenvolvimento')),
-    );
-  }
-}
-
-class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Perfil')),
-      body: const Center(child: Text('Perfil do usuário - Em desenvolvimento')),
-    );
-  }
-}
-
-class FamilySettingsScreen extends StatelessWidget {
-  const FamilySettingsScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Configurações da Família')),
-      body: const Center(
-        child: Text('Configurações da família - Em desenvolvimento'),
       ),
     );
   }

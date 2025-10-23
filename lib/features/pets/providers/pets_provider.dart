@@ -1,107 +1,120 @@
 // features/pets/providers/pets_provider.dart
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
-import 'package:riverpod/riverpod.dart';
-import '../services/firestore_service.dart';
-import '../../pets/models/pet.dart';
-import '../../pet_tasks/models/pet_task.dart';
+import 'dart:io';
 
-// Provider do FirestoreService
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // Importa o essencial do Riverpod
+import 'package:flutter_riverpod/legacy.dart';
+import '../services/firestore_service.dart';
+import '../services/storage_service.dart'; // NOVO: Adicionado para usar o StorageService no PetsNotifier
+import '../../pets/models/pet.dart';
+import '../../pet_tasks/models/pet_task.dart'; // Para allTasksProvider
+
+// --- Providers de Serviço ---
+// Fornece uma instância de FirestoreService.
 final firestoreServiceProvider = Provider<FirestoreService>((ref) {
   return FirestoreService();
 });
 
-// Provider da lista de pets
-final petsProvider = StreamProvider<List<Pet>>((ref) {
+// Fornece uma instância de StorageService.
+final storageServiceProvider = Provider<StorageService>((ref) {
+  return StorageService();
+});
+
+// --- StreamProviders para Dados em Tempo Real (Leitura) ---
+
+// Stream de pets da família do usuário atual.
+// Ideal para exibir uma lista de pets que atualiza em tempo real.
+final petsStreamProvider = StreamProvider<List<Pet>>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
   return firestoreService.getPetsStream();
 });
 
-// Provider de um pet específico
-final petProvider = StreamProvider.family<Pet?, String>((ref, petId) {
+// FutureProvider para buscar um pet específico por ID.
+// Usamos FutureProvider porque seu FirestoreService.getPetById retorna um Future, não um Stream.
+final petFutureProvider = FutureProvider.family<Pet?, String>((ref, petId) {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  return Stream.fromFuture(firestoreService.getPetById(petId));
+  return firestoreService.getPetById(petId);
 });
 
-// Provider das tarefas de um pet
-final petTasksProvider = StreamProvider.family<List<PetTask>, String>((ref, petId) {
+// Stream de tarefas de um pet específico.
+// Ideal para exibir a lista de tarefas de um pet que atualiza em tempo real.
+final petTasksStreamProvider = StreamProvider.family<List<PetTask>, String>((ref, petId) {
   final firestoreService = ref.watch(firestoreServiceProvider);
   return firestoreService.getPetTasksStream(petId);
 });
 
-// Provider de todas as tarefas da família
-final allTasksProvider = StreamProvider<List<PetTask>>((ref) {
+// Stream de todas as tarefas da família do usuário atual.
+// Útil para visões gerais ou dashboards de tarefas.
+final allTasksStreamProvider = StreamProvider<List<PetTask>>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
   return firestoreService.getAllTasksStream();
 });
 
-// Provider de uma tarefa específica
-final taskProvider = StreamProvider.family<PetTask?, String>((ref, taskId) {
+// FutureProvider para buscar uma tarefa específica por ID.
+// Usamos FutureProvider porque seu FirestoreService.getTaskById retorna um Future, não um Stream.
+final taskFutureProvider = FutureProvider.family<PetTask?, String>((ref, taskId) {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  return Stream.fromFuture(firestoreService.getTaskById(taskId));
+  return firestoreService.getTaskById(taskId);
 });
 
-// Provider dos dados da família
+// --- FutureProviders para Dados da Família (Leitura Única) ---
+
+// FutureProvider para obter os dados da família do usuário atual.
 final familyDataProvider = FutureProvider<Map<String, dynamic>?>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
   return firestoreService.getFamilyData();
 });
 
-// Provider dos membros da família
+// FutureProvider para obter a lista de membros da família do usuário atual.
 final familyMembersProvider = FutureProvider<List<Map<String, dynamic>>>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
   return firestoreService.getFamilyMembers();
 });
 
-// Notifier para gerenciar pets
-class PetsNotifier extends StateNotifier<AsyncValue<List<Pet>>> {
+// --- StateNotifiers para Gerenciamento de Ações (CRUD) ---
+
+// Notifier para gerenciar operações de pets (Adicionar, Atualizar, Deletar).
+// O estado é um AsyncValue<void> para indicar o status da última operação.
+class PetsNotifier extends StateNotifier<AsyncValue<void>> {
   final FirestoreService _firestoreService;
-  
-  PetsNotifier(this._firestoreService) : super(const AsyncValue.loading()) {
-    _loadPets();
-  }
-  
-  void _loadPets() {
-    _firestoreService.getPetsStream().listen(
-      (pets) {
-        state = AsyncValue.data(pets);
-      },
-      onError: (error, stackTrace) {
-        state = AsyncValue.error(error, stackTrace);
-      },
-    );
-  }
-  
+  final StorageService _storageService; // Injectar StorageService
+
+  PetsNotifier(this._firestoreService, this._storageService) : super(const AsyncValue.data(null));
+
   Future<String> addPet({
     required String name,
     required PetSpecies species,
     required DateTime birthDate,
     required double weightKg,
-    String? photoUrl,
+    // Removido String? photoUrl daqui, pois o upload é uma etapa separada
   }) async {
+    state = const AsyncValue.loading();
     try {
       final petId = await _firestoreService.addPet(
         name: name,
         species: species,
         birthDate: birthDate,
         weightKg: weightKg,
-        photoUrl: photoUrl,
+        // photoUrl será adicionado em um update posterior após upload
       );
-      return petId;
-    } catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
+      state = const AsyncValue.data(null);
+      return petId; // Retorna o petId para que a UI possa usá-lo para upload de foto
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
       rethrow;
     }
   }
-  
+  void setError(Object error, StackTrace stackTrace) {
+    state = AsyncValue.error(error, stackTrace);
+  }
   Future<void> updatePet({
     required String petId,
     String? name,
     PetSpecies? species,
     DateTime? birthDate,
     double? weightKg,
-    String? photoUrl,
+    String? photoUrl, // photoUrl pode ser atualizado aqui
   }) async {
+    state = const AsyncValue.loading();
     try {
       await _firestoreService.updatePet(
         petId: petId,
@@ -111,47 +124,58 @@ class PetsNotifier extends StateNotifier<AsyncValue<List<Pet>>> {
         weightKg: weightKg,
         photoUrl: photoUrl,
       );
-    } catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
+      state = const AsyncValue.data(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
       rethrow;
     }
   }
-  
+
   Future<void> deletePet(String petId) async {
+    state = const AsyncValue.loading();
     try {
       await _firestoreService.deletePet(petId);
-    } catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
+      state = const AsyncValue.data(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      rethrow;
+    }
+  }
+
+  // Método para lidar com o upload da foto do pet
+  // Este método poderia ser um StateNotifierProvider separado se a lógica de upload for complexa
+  Future<String> uploadPetPhoto({required String petId, required File imageFile}) async {
+    state = const AsyncValue.loading(); // Reutiliza o estado para o upload
+    try {
+      final downloadUrl = await _storageService.uploadPetPhotoWithValidation(
+        petId: petId,
+        imageFile: imageFile,
+      );
+      // Após o upload, atualiza a URL da foto no documento do pet no Firestore
+      await _firestoreService.updatePet(petId: petId, photoUrl: downloadUrl);
+      state = const AsyncValue.data(null);
+      return downloadUrl;
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
       rethrow;
     }
   }
 }
 
-// Provider do PetsNotifier
-final petsNotifierProvider = StateNotifierProvider<PetsNotifier, AsyncValue<List<Pet>>>((ref) {
+// StateNotifierProvider para PetsNotifier.
+final petsNotifierProvider = StateNotifierProvider<PetsNotifier, AsyncValue<void>>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  return PetsNotifier(firestoreService);
+  final storageService = ref.watch(storageServiceProvider);
+  return PetsNotifier(firestoreService, storageService);
 });
 
-// Notifier para gerenciar tarefas
-class TasksNotifier extends StateNotifier<AsyncValue<List<PetTask>>> {
+// Notifier para gerenciar operações de tarefas (Adicionar, Atualizar, Deletar, Toggle Done).
+// O estado é um AsyncValue<void> para indicar o status da última operação.
+class TasksNotifier extends StateNotifier<AsyncValue<void>> {
   final FirestoreService _firestoreService;
-  
-  TasksNotifier(this._firestoreService) : super(const AsyncValue.loading()) {
-    _loadTasks();
-  }
-  
-  void _loadTasks() {
-    _firestoreService.getAllTasksStream().listen(
-      (tasks) {
-        state = AsyncValue.data(tasks);
-      },
-      onError: (error, stackTrace) {
-        state = AsyncValue.error(error, stackTrace);
-      },
-    );
-  }
-  
+
+  TasksNotifier(this._firestoreService) : super(const AsyncValue.data(null));
+
   Future<String> addTask({
     required String petId,
     required PetTaskType type,
@@ -159,6 +183,7 @@ class TasksNotifier extends StateNotifier<AsyncValue<List<PetTask>>> {
     DateTime? dueDate,
     String? notes,
   }) async {
+    state = const AsyncValue.loading();
     try {
       final taskId = await _firestoreService.addTask(
         petId: petId,
@@ -167,13 +192,14 @@ class TasksNotifier extends StateNotifier<AsyncValue<List<PetTask>>> {
         dueDate: dueDate,
         notes: notes,
       );
+      state = const AsyncValue.data(null);
       return taskId;
-    } catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
       rethrow;
     }
   }
-  
+
   Future<void> updateTask({
     required String taskId,
     PetTaskType? type,
@@ -182,6 +208,7 @@ class TasksNotifier extends StateNotifier<AsyncValue<List<PetTask>>> {
     String? notes,
     bool? done,
   }) async {
+    state = const AsyncValue.loading();
     try {
       await _firestoreService.updateTask(
         taskId: taskId,
@@ -191,107 +218,108 @@ class TasksNotifier extends StateNotifier<AsyncValue<List<PetTask>>> {
         notes: notes,
         done: done,
       );
-    } catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
+      state = const AsyncValue.data(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
       rethrow;
     }
   }
-  
+
   Future<void> deleteTask(String taskId) async {
+    state = const AsyncValue.loading();
     try {
       await _firestoreService.deleteTask(taskId);
-    } catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
+      state = const AsyncValue.data(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
       rethrow;
     }
   }
-  
+
   Future<void> toggleTaskDone(String taskId) async {
+    state = const AsyncValue.loading();
     try {
       await _firestoreService.toggleTaskDone(taskId);
-    } catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
+      state = const AsyncValue.data(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
       rethrow;
     }
   }
 }
 
-// Provider do TasksNotifier
-final tasksNotifierProvider = StateNotifierProvider<TasksNotifier, AsyncValue<List<PetTask>>>((ref) {
+// StateNotifierProvider para TasksNotifier.
+final tasksNotifierProvider = StateNotifierProvider<TasksNotifier, AsyncValue<void>>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
   return TasksNotifier(firestoreService);
 });
 
-// Provider para tarefas pendentes
-final pendingTasksProvider = Provider<List<PetTask>>((ref) {
-  final tasks = ref.watch(allTasksProvider);
-  
-  return tasks.when(
-    data: (tasks) => tasks.where((task) => !task.done).toList(),
-    loading: () => [],
-    error: (_, _) => [],
-  );
+// --- Providers de Dados Derivados (Filtros e Estatísticas) ---
+
+// Tasks com o status 'isOverdue' e 'isDueSoon' são dependentes de getters nos seus modelos,
+// então vou assumir que esses getters estão implementados corretamente nos modelos PetTask.
+extension PetTaskDueDateExtension on PetTask {
+  bool get isOverdue => dueDate != null && dueDate!.isBefore(DateTime.now()) && !done;
+  bool get isDueSoon => dueDate != null && !done && dueDate!.isAfter(DateTime.now()) && dueDate!.difference(DateTime.now()).inDays <= 7;
+}
+
+
+// Lista de tarefas pendentes (não concluídas).
+final pendingTasksProvider = Provider<AsyncValue<List<PetTask>>>((ref) {
+  return ref.watch(allTasksStreamProvider).when(
+        data: (list) => AsyncValue.data(list.where((task) => !task.done).toList()),
+        loading: () => const AsyncValue.loading(),
+        error: (e, st) => AsyncValue.error(e, st),
+      );
 });
 
-// Provider para tarefas vencidas
-final overdueTasksProvider = Provider<List<PetTask>>((ref) {
-  final tasks = ref.watch(allTasksProvider);
-  
-  return tasks.when(
-    data: (tasks) => tasks.where((task) => task.isOverdue).toList(),
-    loading: () => [],
-    error: (_, _) => [],
-  );
+// Lista de tarefas atrasadas.
+final overdueTasksProvider = Provider<AsyncValue<List<PetTask>>>((ref) {
+  return ref.watch(allTasksStreamProvider).when(
+        data: (list) => AsyncValue.data(list.where((task) => task.isOverdue).toList()),
+        loading: () => const AsyncValue.loading(),
+        error: (e, st) => AsyncValue.error(e, st),
+      );
 });
 
-// Provider para tarefas próximas do vencimento
-final dueSoonTasksProvider = Provider<List<PetTask>>((ref) {
-  final tasks = ref.watch(allTasksProvider);
-  
-  return tasks.when(
-    data: (tasks) => tasks.where((task) => task.isDueSoon).toList(),
-    loading: () => [],
-    error: (_, _) => [],
-  );
+// Lista de tarefas próximas do vencimento.
+final dueSoonTasksProvider = Provider<AsyncValue<List<PetTask>>>((ref) {
+  return ref.watch(allTasksStreamProvider).when(
+        data: (list) => AsyncValue.data(list.where((task) => task.isDueSoon).toList()),
+        loading: () => const AsyncValue.loading(),
+        error: (e, st) => AsyncValue.error(e, st),
+      );
 });
 
-// Provider para estatísticas dos pets
-final petsStatsProvider = Provider<Map<String, int>>((ref) {
-  final pets = ref.watch(petsProvider);
-  
-  return pets.when(
-    data: (pets) {
-      final stats = <String, int>{};
-      
-      for (final pet in pets) {
-        final species = pet.species.displayName;
-        stats[species] = (stats[species] ?? 0) + 1;
-      }
-      
-      return stats;
-    },
-    loading: () => {},
-    error: (_, _) => {},
-  );
+// Estatísticas de pets por espécie.
+final petsStatsProvider = Provider<AsyncValue<Map<String, int>>>((ref) {
+  return ref.watch(petsStreamProvider).when(
+        data: (list) {
+          final stats = <String, int>{};
+          for (final pet in list) {
+            final species = pet.species.displayName;
+            stats[species] = (stats[species] ?? 0) + 1;
+          }
+          return AsyncValue.data(stats);
+        },
+        loading: () => const AsyncValue.loading(),
+        error: (e, st) => AsyncValue.error(e, st),
+      );
 });
 
-// Provider para estatísticas das tarefas
-final tasksStatsProvider = Provider<Map<String, int>>((ref) {
-  final tasks = ref.watch(allTasksProvider);
-  
-  return tasks.when(
-    data: (tasks) {
-      final stats = <String, int>{
-        'total': tasks.length,
-        'completed': tasks.where((task) => task.done).length,
-        'pending': tasks.where((task) => !task.done).length,
-        'overdue': tasks.where((task) => task.isOverdue).length,
-        'dueSoon': tasks.where((task) => task.isDueSoon).length,
-      };
-      
-      return stats;
-    },
-    loading: () => {},
-    error: (_, _) => {},
-  );
+// Estatísticas de tarefas (total, concluídas, pendentes, atrasadas, próximas do vencimento).
+final tasksStatsProvider = Provider<AsyncValue<Map<String, int>>>((ref) {
+  return ref.watch(allTasksStreamProvider).when(
+        data: (list) {
+          return AsyncValue.data({
+            'total': list.length,
+            'completed': list.where((t) => t.done).length,
+            'pending': list.where((t) => !t.done).length,
+            'overdue': list.where((t) => t.isOverdue).length,
+            'dueSoon': list.where((t) => t.isDueSoon).length,
+          });
+        },
+        loading: () => const AsyncValue.loading(),
+        error: (e, st) => AsyncValue.error(e, st),
+      );
 });

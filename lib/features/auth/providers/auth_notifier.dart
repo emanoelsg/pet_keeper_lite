@@ -1,9 +1,9 @@
 // features/auth/providers/auth_notifier.dart
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import '../services/auth_service.dart';
 import '../models/user.dart';
-
 
 class AuthNotifier extends StateNotifier<AsyncValue<User?>> {
   final AuthService _authService;
@@ -41,7 +41,6 @@ class AuthNotifier extends StateNotifier<AsyncValue<User?>> {
         email: email,
         password: password,
       );
-      // estado será atualizado pelo listener
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
@@ -95,7 +94,10 @@ class AuthNotifier extends StateNotifier<AsyncValue<User?>> {
 
   Future<void> updateUserData({String? displayName, String? familyCode}) async {
     try {
-      await _authService.updateUserData(displayName: displayName, familyCode: familyCode);
+      await _authService.updateUserData(
+        displayName: displayName,
+        familyCode: familyCode,
+      );
       await _loadUserData();
     } catch (e, st) {
       state = AsyncValue.error(e, st);
