@@ -73,7 +73,9 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             displayName: _nameController.text.trim(),
             familyCode: _familyCodeController.text.trim(),
           );
-    } catch (e) {}
+    } catch (e) {
+      debugPrint('Erro ao registrar usuário: $e');
+    }
   }
 
   @override
